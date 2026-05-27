@@ -1,0 +1,54 @@
+# Core
+fastapi>=0.136.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.9.0
+pydantic-settings>=2.6.0
+python-multipart>=0.0.9
+python-dotenv>=1.0.0
+httpx>=0.27.0
+tenacity>=8.2.0
+structlog>=24.0.0
+python-json-logger>=2.0.0
+
+# LangChain & LangGraph
+langchain>=1.0.0
+langchain-core>=1.0.0
+langchain-community>=0.3.0
+langchain-openai>=1.0.0
+langgraph>=1.0.0
+
+# Database
+neo4j>=5.0.0
+pymysql>=1.1.0
+sqlalchemy>=2.0.0
+aiomysql>=0.2.0
+
+# Auth
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+bcrypt>=4.0.0
+
+# Observability
+opentelemetry-api>=1.22.0
+opentelemetry-sdk>=1.22.0
+opentelemetry-instrumentation-fastapi>=0.43b0
+opentelemetry-instrumentation-asgi>=0.43b0
+opentelemetry-exporter-otlp-proto-grpc>=1.22.0
+deprecated>=1.2.0
+
+# Utils
+numpy==1.26.4
+jsonpickle>=3.0.0
+
+# Vector Database
+chromadb>=0.5.0
+langchain-chroma>=0.1.0
+langchain-community>=0.3.0
+
+# BM25 Hybrid Search
+rank-bm25>=0.2.2
+
+# RAG Rerank（开发环境仅 jieba；线上 cross_encoder 需安装下一行）
+jieba>=0.42.1
+# 本地开发可注释掉以跳过 PyTorch 下载；生产/预发部署时请保留
+sentence-transformers>=3.0.0

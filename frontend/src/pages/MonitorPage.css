@@ -1,0 +1,58 @@
+.monitor-page {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.page-header h1 {
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.budget-item {
+  margin-bottom: 16px;
+}
+
+.budget-item span {
+  display: block;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.intent-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.intent-item span {
+  width: 140px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.intent-item .ant-progress {
+  flex: 1;
+}
+
+.health-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.health-item:last-child {
+  border-bottom: none;
+}
+
+.health-item span {
+  color: var(--text-primary);
+}

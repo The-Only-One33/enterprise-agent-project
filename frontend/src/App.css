@@ -1,0 +1,21 @@
+.app-layout {
+  min-height: 100vh;
+}
+
+.main-layout {
+  margin-left: 240px;
+  background: var(--primary-bg);
+}
+
+.content {
+  padding: 24px;
+  min-height: calc(100vh - 64px);
+  background: linear-gradient(135deg, var(--primary-bg) 0%, #1a1f36 100%);
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .main-layout {
+    margin-left: 0;
+  }
+}

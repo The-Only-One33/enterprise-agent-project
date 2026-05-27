@@ -1,0 +1,15 @@
+.knowledge-page {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.page-header h1 {
+  color: var(--text-primary);
+  margin: 0;
+}

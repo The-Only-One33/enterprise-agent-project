@@ -1,0 +1,60 @@
+.sidebar {
+  position: fixed !important;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: linear-gradient(180deg, #1A1F36 0%, #252B48 100%) !important;
+  border-right: 1px solid var(--border-color);
+  z-index: 100;
+}
+
+.sidebar .logo {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.sidebar .logo-icon {
+  font-size: 28px;
+  color: var(--accent-blue);
+  margin-right: 12px;
+}
+
+.sidebar .logo-text {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: linear-gradient(90deg, #3B82F6, #10B981);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.sidebar-menu {
+  background: transparent !important;
+  border: none !important;
+}
+
+.sidebar-menu .ant-menu-item {
+  margin: 4px 12px !important;
+  border-radius: 8px !important;
+  height: 44px !important;
+  line-height: 44px !important;
+}
+
+.sidebar-menu .ant-menu-item:hover {
+  background: rgba(59, 130, 246, 0.15) !important;
+}
+
+.sidebar-menu .ant-menu-item-selected {
+  background: rgba(59, 130, 246, 0.25) !important;
+}
+
+.sidebar-menu .ant-menu-item-selected::after {
+  display: none;
+}
+
+.sidebar-menu .ant-menu-item .anticon {
+  font-size: 18px !important;
+}

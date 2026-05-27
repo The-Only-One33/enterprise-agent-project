@@ -1,0 +1,61 @@
+.projects-page {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.page-header h1 {
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.project-card .project-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.project-card h3 {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.project-desc {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.project-meta {
+  margin-top: 16px;
+}
+
+.team-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.team-stat {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.team-stat .anticon {
+  font-size: 20px;
+  color: var(--accent-blue);
+}
+
+.team-stat strong {
+  color: var(--text-primary);
+  font-size: 18px;
+}

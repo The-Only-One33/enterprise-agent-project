@@ -1,0 +1,123 @@
+# ==================== 操作系统 ====================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ==================== IDE / 编辑器 ====================
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# ==================== 环境变量与密钥（切勿提交） ====================
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+credentials.json
+secrets/
+
+# ==================== Python / 后端 ====================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 虚拟环境
+.venv/
+venv/
+ENV/
+env/
+.python-version
+
+# 测试与类型检查
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+hypothesis/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ==================== Node / 前端 ====================
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# 日志
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ==================== 构建产物 ====================
+# Vite 构建输出（若复制到后端 static，也忽略）
+backend/static/assets/
+backend/static/index.html
+
+# ==================== 本地数据与向量库 ====================
+# Chroma 持久化（体积大，本地重建）
+backend/data/chroma_db/
+
+# SQLite / 本地数据库文件
+*.sqlite3
+*.sqlite
+*.db-journal
+
+# ==================== 日志与运行时 ====================
+*.log
+logs/
+backend/backend.log
+backend/*.log
+
+# ==================== 模型缓存（可选，体积大） ====================
+.cache/
+models/
+sentence_transformers/
+.huggingface/
+
+# ==================== Docker（若本地有覆盖文件） ====================
+docker-compose.override.yml
+.docker/
+
+# ==================== 杂项 ====================
+*.bak
+*.tmp
+*.temp
+.cache
