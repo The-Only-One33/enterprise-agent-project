@@ -41,6 +41,50 @@ MATCH_WEIGHTS = {
 CONFIDENCE_THRESHOLD_HIGH = 0.8   # 高置信度，直接使用
 CONFIDENCE_THRESHOLD_LOW = 0.5     # 低置信度，需要澄清
 
+# 意图中文名（澄清提示用）
+INTENT_DISPLAY_NAMES: Dict[str, str] = {
+    "create_task": "创建任务",
+    "update_task": "更新任务",
+    "delete_task": "删除任务",
+    "complete_task": "完成任务",
+    "query_task_list": "查询任务列表",
+    "query_my_tasks": "查看我的任务",
+    "query_task_status": "按状态查询任务",
+    "query_task_detail": "查看任务详情",
+    "query_task_progress": "查看任务进度",
+    "create_project": "创建项目",
+    "query_project_list": "查询项目列表",
+    "general_chat": "普通对话",
+}
+
+# 高置信度规则：优先于 LLM，避免「帮我创建一个任务」等被误判为查询
+HIGH_CONFIDENCE_RULES: List[Tuple[str, IntentType, float]] = [
+    # 创建（动作词前不能紧跟其它汉字，避免「最近创建的任务」误判）
+    (
+        r"(?:^|(?<![\u4e00-\u9fff]))(?:帮我|请|麻烦)?(?:创建|新建|添加|建立)(?:一个|个)?任务",
+        IntentType.CREATE_TASK,
+        0.96,
+    ),
+    (
+        r"(?:^|(?<![\u4e00-\u9fff]))(?:帮我|请)?(?:创建|新建|添加)(?:一个|个)?项目",
+        IntentType.CREATE_PROJECT,
+        0.96,
+    ),
+    (r"(?:删除|移除|取消)(?:一个|个)?任务", IntentType.DELETE_TASK, 0.94),
+    (r"(?:更新|修改|编辑)(?:一个|个)?任务", IntentType.UPDATE_TASK, 0.94),
+    (r"(?:完成|结束)(?:一个|个)?任务", IntentType.COMPLETE_TASK, 0.94),
+    (
+        r"(?:查询|查看|查|看看|有哪些|有什么|我的|待办).{0,16}任务",
+        IntentType.QUERY_TASK_LIST,
+        0.92,
+    ),
+    (
+        r"任务.{0,8}(?:列表|有哪些|有什么)",
+        IntentType.QUERY_TASK_LIST,
+        0.9,
+    ),
+]
+
 
 class IntentRouter:
     """意图路由器 - 支持多层级匹配"""
@@ -79,6 +123,11 @@ class IntentRouter:
 - execution_title: 执行分工名称
 - evaluation_content: 评价内容
 - action: 操作类型 (创建/编辑/删除/查询/添加)
+
+## 识别要点（务必区分）：
+- 「创建/新建/添加 + 任务」→ create_task（例如：帮我创建一个任务、新建任务）
+- 「查询/查看/有哪些 + 任务」→ query_task_list（例如：我有哪些任务）
+- 「最近创建的任务」是查询（按时间筛选），不是 create_task
 
 ## 输出格式（JSON）：
 {{"intent": "意图类型", "confidence": 0.0-1.0, "entities": {{"实体类型": "实体值"}}, "reasoning": "识别理由"}}
@@ -195,17 +244,43 @@ class IntentRouter:
             logger.warning(f"LLM recognition failed: {e}")
         return {"intent": "general_chat", "confidence": 0.5, "entities": {}, "reasoning": ""}
 
+    def _intent_label(self, intent_key: str) -> str:
+        return INTENT_DISPLAY_NAMES.get(intent_key, intent_key.replace("_", " "))
+
+    def _try_rule_based_match(self, user_input: str) -> Optional[IntentResult]:
+        """规则优先匹配：覆盖 LLM 单独误判的场景。"""
+        text = user_input.strip()
+        if not text:
+            return None
+
+        for pattern, intent, confidence in HIGH_CONFIDENCE_RULES:
+            if re.search(pattern, text, re.IGNORECASE):
+                routing_target = self._get_routing_target(intent)
+                suggested_model = self._get_suggested_model(intent)
+                return IntentResult(
+                    intent=intent,
+                    confidence=confidence,
+                    entities={},
+                    routing_target=routing_target,
+                    suggested_model=suggested_model,
+                    reasoning=f"规则匹配: {pattern}",
+                    needs_clarification=False,
+                    clarification_question="",
+                    candidate_intents=[intent.value],
+                    confidence_breakdown={"strategy": "rule_based", "pattern": pattern},
+                )
+        return None
+
     def _generate_clarification_question(
         self,
         candidates: List[Tuple[str, float]]
     ) -> str:
         """生成澄清问题"""
-        intent_names = [c[0].replace("_", " ") for c in candidates]
+        intent_names = [self._intent_label(c[0]) for c in candidates]
         if len(intent_names) == 2:
-            return f"您是想'{intent_names[0]}'还是'{intent_names[1]}'？"
-        else:
-            options = "、".join(intent_names[:3])
-            return f"您是想{options}，还是其他？"
+            return f"您是想「{intent_names[0]}」还是「{intent_names[1]}」？"
+        options = "、".join(f"「{name}」" for name in intent_names[:3])
+        return f"您是想{options}，还是其他？请明确告诉我您想做什么。"
 
     def _build_reasoning(
         self,
@@ -250,6 +325,16 @@ class IntentRouter:
             IntentResult: 意图识别结果
         """
         logger.info("intent_recognition_started", user_input=user_input[:100])
+
+        # ===== Step 0: 高置信度规则（优先） =====
+        rule_result = self._try_rule_based_match(user_input)
+        if rule_result is not None:
+            logger.info(
+                "intent_recognition_rule_matched",
+                intent=rule_result.intent.value,
+                confidence=rule_result.confidence,
+            )
+            return rule_result
 
         # ===== Step 1: 关键词匹配 =====
         keyword_matches = self._keyword_match(user_input)
@@ -363,20 +448,36 @@ class IntentRouter:
         needs_clarification = False
         clarification_question = ""
 
-        if final_confidence < CONFIDENCE_THRESHOLD_LOW:
-            # 置信度太低，需要澄清
+        best_strategy = (
+            candidates.get(final_intent.value, {}).get("strategy", "")
+            if candidates
+            else ""
+        )
+        keyword_strong = (
+            best_strategy in ("keyword_only", "both_support")
+            and candidates.get(final_intent.value, {}).get("keyword_score", 0) >= 0.6
+        )
+
+        if final_confidence < CONFIDENCE_THRESHOLD_LOW and not keyword_strong:
             needs_clarification = True
-            # 从候选列表中取前3个
             top_candidates = [
                 (intent, data["combined_score"])
                 for intent, data in sorted(
                     candidates.items(),
                     key=lambda x: x[1]["combined_score"],
-                    reverse=True
+                    reverse=True,
                 )[:3]
+                if data["combined_score"] > 0
             ]
             logger.info(f"top_candidates: {top_candidates}")
-            clarification_question = self._generate_clarification_question(top_candidates)
+            if top_candidates:
+                clarification_question = self._generate_clarification_question(
+                    top_candidates
+                )
+            else:
+                clarification_question = (
+                    "抱歉，我没太理解您的意思，请再具体描述一下您想做什么？"
+                )
 
         # 构建结果
         result = IntentResult(

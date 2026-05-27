@@ -179,7 +179,7 @@ async def db_query_node(state: AgentState) -> AgentState:
     - 租户隔离由微服务内部处理
     - 此处传递 tenant_id 和 employ_code
     """
-    if state.get("routing_target") != "db":
+    if state.get("routing_target") not in ("db", "create", "update"):
         return state
 
     intent = state["intent"]
@@ -386,7 +386,7 @@ def create_agent_graph(*, interrupt_before_llm: bool = False):
             return "rag_search"
         elif routing_target == "graph":
             return "graph_traverse"
-        elif routing_target == "db":
+        elif routing_target in ("db", "create", "update"):
             return "db_query"
         else:
             return "llm_reasoning"

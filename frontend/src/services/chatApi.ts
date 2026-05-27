@@ -57,12 +57,80 @@ export interface AgentStreamMeta {
   conversation_id?: number
 }
 
+/** 流式读超时（单次 read 无新数据） */
+export const STREAM_READ_TIMEOUT_MS = 60_000
+
+export type StreamInterruptReason = 'timeout' | 'disconnect'
+
+export class StreamInterruptedError extends Error {
+  readonly reason: StreamInterruptReason
+
+  constructor(message: string, reason: StreamInterruptReason) {
+    super(message)
+    this.name = 'StreamInterruptedError'
+    this.reason = reason
+  }
+}
+
 export interface AgentStreamHandlers {
   onToken: (delta: string) => void
   onClarification?: (data: ClarificationResponse) => void
   onMeta?: (meta: AgentStreamMeta) => void
   onDone?: () => void
   onError?: (message: string) => void
+  /** 连接结束但未收到 done，或读超时 */
+  onInterrupted?: (message: string, reason: StreamInterruptReason) => void
+}
+
+function readStreamChunkWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (signal?.aborted) {
+    return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'))
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false
+
+    const timer = window.setTimeout(() => {
+      if (settled) return
+      settled = true
+      reject(
+        new StreamInterruptedError(
+          '长时间未收到数据，连接可能已超时',
+          'timeout',
+        ),
+      )
+    }, timeoutMs)
+
+    const onAbort = () => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timer)
+      reject(new DOMException('The operation was aborted.', 'AbortError'))
+    }
+
+    signal?.addEventListener('abort', onAbort, { once: true })
+
+    reader.read().then(
+      result => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
+        resolve(result)
+      },
+      err => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
+        reject(err)
+      },
+    )
+  })
 }
 
 /** 解析 SSE 文本块 */
@@ -94,6 +162,7 @@ export const chatApi = {
     conversationId: number | undefined,
     handlers: AgentStreamHandlers,
     signal?: AbortSignal,
+    readTimeoutMs: number = STREAM_READ_TIMEOUT_MS,
   ): Promise<void> => {
     const res = await fetch(`${API_BASE_URL}/agent/chat/stream`, {
       method: 'POST',
@@ -121,6 +190,7 @@ export const chatApi = {
 
     const decoder = new TextDecoder()
     let buffer = ''
+    let receivedDoneEvent = false
 
     const dispatch = (block: string) => {
       const parsed = parseSseBlock(block)
@@ -146,6 +216,7 @@ export const chatApi = {
           handlers.onError?.(String(payload.message ?? '流式请求失败'))
           break
         case 'done':
+          receivedDoneEvent = true
           handlers.onDone?.()
           break
         default:
@@ -153,15 +224,37 @@ export const chatApi = {
       }
     }
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const parts = buffer.split('\n\n')
-      buffer = parts.pop() ?? ''
-      for (const part of parts) dispatch(part)
+    try {
+      while (true) {
+        const { done, value } = await readStreamChunkWithTimeout(
+          reader,
+          readTimeoutMs,
+          signal,
+        )
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const parts = buffer.split('\n\n')
+        buffer = parts.pop() ?? ''
+        for (const part of parts) dispatch(part)
+      }
+
+      if (buffer.trim()) dispatch(buffer)
+
+      if (!receivedDoneEvent) {
+        handlers.onInterrupted?.(
+          '连接已断开，生成可能未完成',
+          'disconnect',
+        )
+      }
+    } catch (err) {
+      throw err
+    } finally {
+      try {
+        await reader.cancel()
+      } catch {
+        /* ignore */
+      }
     }
-    if (buffer.trim()) dispatch(buffer)
   },
 
   // 获取对话列表

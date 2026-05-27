@@ -31,8 +31,11 @@ credentials.json
 secrets/
 
 # ==================== Python / 后端 ====================
+# 匹配任意目录下的缓存（仅对「未跟踪」文件生效；若曾被 git add 过需 git rm --cached）
+**/__pycache__/
 __pycache__/
 *.py[cod]
+*.pyc
 *$py.class
 *.so
 .Python

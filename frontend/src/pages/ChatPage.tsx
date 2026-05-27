@@ -2,7 +2,12 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { SendOutlined, RobotOutlined, UserOutlined, LoadingOutlined, BulbOutlined } from '@ant-design/icons'
 import { Spin, Collapse, Tag, Empty, message } from 'antd'
 import ReactMarkdown from 'react-markdown'
-import { chatApi, type ReasoningStep, type Source } from '../services/chatApi'
+import {
+  chatApi,
+  StreamInterruptedError,
+  type ReasoningStep,
+  type Source,
+} from '../services/chatApi'
 import { useTypewriter } from '../hooks/useTypewriter'
 import './ChatPage.css'
 
@@ -70,6 +75,22 @@ export default function ChatPage() {
     updateStreamingMessage,
     {},
     handleTypewriterComplete,
+  )
+
+  /** 流中断/超时：保留已生成内容并追加提示 */
+  const finishStreamWithNotice = useCallback(
+    (notice: string) => {
+      typewriter.flushToReceived()
+      const partial =
+        typewriter.getReceivedText() || typewriter.getDisplayText()
+      const patch = pendingMetaRef.current ?? {}
+      pendingMetaRef.current = null
+      const content = partial
+        ? `${partial}\n\n---\n\n⚠️ ${notice}`
+        : `⚠️ ${notice}`
+      finishStreamingMessage({ content, ...patch })
+    },
+    [finishStreamingMessage, typewriter],
   )
 
   useEffect(() => {
@@ -172,8 +193,11 @@ export default function ChatPage() {
           },
           onError: errMsg => {
             message.error(errMsg)
-            typewriter.setImmediate('抱歉，生成回答时出错。')
-            finishStreamingMessage({ content: '抱歉，生成回答时出错。' })
+            finishStreamWithNotice(errMsg || '生成回答时出错')
+          },
+          onInterrupted: (errMsg) => {
+            message.warning(errMsg)
+            finishStreamWithNotice(`${errMsg}，请重试`)
           },
           onDone: () => typewriter.markStreamDone(),
         },
@@ -181,17 +205,28 @@ export default function ChatPage() {
       )
     } catch (error: unknown) {
       if (error instanceof Error && error.name === 'AbortError') {
+        typewriter.flushToReceived()
+        const partial =
+          typewriter.getReceivedText() || typewriter.getDisplayText()
         typewriter.markStreamDone()
-        finishStreamingMessage()
+        if (partial) {
+          finishStreamingMessage({ content: partial })
+        } else {
+          finishStreamingMessage()
+        }
+        return
+      }
+      if (error instanceof StreamInterruptedError) {
+        message.warning(error.message)
+        finishStreamWithNotice(`${error.message}，请重试`)
         return
       }
       const errMsg =
         error instanceof Error ? error.message : '请求失败，请检查后端服务'
       message.error(errMsg)
-      typewriter.setImmediate('抱歉，Agent 服务暂时不可用。请确保后端服务已启动。')
-      finishStreamingMessage({
-        content: '抱歉，Agent 服务暂时不可用。请确保后端服务已启动。',
-      })
+      finishStreamWithNotice(
+        'Agent 服务暂时不可用，请检查后端服务后重试',
+      )
     }
   }
 

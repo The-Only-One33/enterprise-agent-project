@@ -81,6 +81,7 @@ TaskIntentPatterns = [
             "截止.*", "截止日期", "创建时间",
             "today", "tomorrow", "this week", "due.*"
         ],
+        exclude_keywords=["创建任务", "新建任务", "添加任务", "帮我创建", "帮我新建"],
         routing_target=RoutingTarget.DB,
         suggested_model="gpt-3.5-turbo",
         priority=7,
@@ -130,13 +131,16 @@ TaskIntentPatterns = [
     IntentPattern(
         intent=IntentType.CREATE_TASK,
         keywords=[
-            "创建任务", "新建任务", "添加任务", "新建.*任务",
+            "创建任务", "新建任务", "添加任务",
+            "创建.*任务", "新建.*任务", "添加.*任务", "建立.*任务",
+            "帮我.*创建.*任务", "帮我.*新建.*任务", "帮我.*添加.*任务",
+            "请.*创建.*任务", "麻烦.*创建.*任务",
             "create.*task", "new.*task", "add.*task",
-            "我想.*任务", "要.*任务"
         ],
+        exclude_keywords=["查询", "查看", "有哪些", "有什么", "列表", "我的任务"],
         routing_target=RoutingTarget.CREATE,
         suggested_model="gpt-4-turbo",
-        priority=9,
+        priority=12,
     ),
 
     # 更新任务
@@ -275,6 +279,7 @@ TaskIntentPatterns = [
             "任务.*执行.*评分", "任务.*内容.*评分",
             ".*执行.*列表.*评分",
         ],
+        exclude_keywords=["创建", "新建", "添加"],
         routing_target=RoutingTarget.DB,
         suggested_model="gpt-3.5-turbo",
         priority=7,

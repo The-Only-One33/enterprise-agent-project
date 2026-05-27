@@ -51,6 +51,7 @@ class IntentTester:
             ("我想新建一个任务", "create_task"),
             ("帮我添加一个任务", "create_task"),
             ("新建一个任务来完成这个", "create_task"),
+            ("帮我创建一个任务", "create_task"),
         ],
 
         # 任务评分
