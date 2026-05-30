@@ -23,3 +23,9 @@ async def get_usage_report(days: int = 7):
 async def get_cost_distribution(days: int = 7):
     monitor = await get_cost_monitor()
     return await monitor.get_cost_distribution(days=days)
+
+
+@router.get("/recent-activity")
+async def get_recent_activity(limit: int = 20):
+    monitor = await get_cost_monitor()
+    return {"items": await monitor.get_recent_activity(limit=limit)}

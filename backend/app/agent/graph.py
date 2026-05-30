@@ -55,7 +55,14 @@ async def intent_recognition_node(state: AgentState) -> AgentState:
         last_message = getattr(last_message_data, "content", str(last_message_data))
     
     intent_result = await router.recognize(last_message)
-    
+
+    from app.services.token_usage_service import persist_intent_llm_usages
+
+    await persist_intent_llm_usages(
+        state,
+        intent_result.llm_usages,
+        recognized_intent=intent_result.intent.value,
+    )
     
     state["intent"] = intent_result.intent.value
     state["confidence"] = intent_result.confidence
@@ -322,18 +329,49 @@ def _extract_chunk_text(content: object) -> str:
 
 async def ainvoke_llm_response(state: AgentState) -> str:
     """非流式：一次性生成完整回复。"""
+    from app.config import get_settings
+    from app.services.llm_usage import build_usage_for_llm_call, extract_usage_from_llm_message
+
+    settings = get_settings()
+    messages = build_llm_prompt_messages(state)
     llm = get_chat_llm()
-    response = await llm.ainvoke(build_llm_prompt_messages(state))
-    return _extract_chunk_text(response.content)
+    response = await llm.ainvoke(messages)
+    text = _extract_chunk_text(response.content)
+    usage = build_usage_for_llm_call(
+        extract_usage_from_llm_message(response),
+        prompt_messages=messages,
+        completion_text=text,
+    )
+    state["token_usage"] = {**usage, "model": settings.openai_model}
+    return text
 
 
 async def astream_llm_tokens(state: AgentState) -> AsyncIterator[str]:
     """流式：按 LLM 真实 token 产出文本增量。"""
+    from app.config import get_settings
+    from app.services.llm_usage import build_usage_for_llm_call, extract_usage_from_llm_message
+
+    settings = get_settings()
+    messages = build_llm_prompt_messages(state)
     llm = get_chat_llm()
-    async for chunk in llm.astream(build_llm_prompt_messages(state)):
+    provider_usage: dict = {}
+    parts: List[str] = []
+
+    async for chunk in llm.astream(messages):
+        chunk_usage = extract_usage_from_llm_message(chunk)
+        if chunk_usage.get("total_tokens", 0) > 0:
+            provider_usage = chunk_usage
         text = _extract_chunk_text(chunk.content)
         if text:
+            parts.append(text)
             yield text
+
+    usage = build_usage_for_llm_call(
+        provider_usage,
+        prompt_messages=messages,
+        completion_text="".join(parts),
+    )
+    state["token_usage"] = {**usage, "model": settings.openai_model}
 
 
 def append_llm_reasoning_step(state: AgentState, *, streamed: bool = False) -> None:
@@ -347,8 +385,11 @@ def append_llm_reasoning_step(state: AgentState, *, streamed: bool = False) -> N
 
 async def llm_reasoning_node(state: AgentState) -> AgentState:
     """LLM推理节点（非流式路径）"""
+    from app.services.token_usage_service import persist_token_usage_from_state
+
     state["final_response"] = await ainvoke_llm_response(state)
     append_llm_reasoning_step(state, streamed=False)
+    await persist_token_usage_from_state(state)
     return state
 
 

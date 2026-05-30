@@ -3,17 +3,14 @@
 """
 from neo4j import AsyncGraphDatabase
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.orm import declarative_base
 from typing import AsyncGenerator
 import structlog
 
 from app.config import get_settings
+from app.core.base import Base
 
 settings = get_settings()
 logger = structlog.get_logger()
-
-# SQLAlchemy Base
-Base = declarative_base()
 
 # Neo4j 驱动
 neo4j_driver = None
@@ -53,6 +50,8 @@ async def init_databases():
     
     # 初始化 MySQL 表 (可选)
     try:
+        import app.models  # noqa: F401
+
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("MySQL connected successfully")

@@ -114,6 +114,8 @@ class IntentResult(BaseModel):
     clarification_question: str = ""    # 
     candidate_intents: List[str] = []  # 可能的意图列表
     confidence_breakdown: Dict[str, Any] = {}  # 各意图置信度分解
+    # 意图链路 LLM 用量（实体提取、意图识别），供 cost_monitor 落库
+    llm_usages: List[Dict[str, Any]] = []
 
 
 class IntentPattern(BaseModel):

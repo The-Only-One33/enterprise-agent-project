@@ -199,8 +199,10 @@ class IntentRouter:
 
         return matches
 
-    async def _extract_entities(self, user_input: str) -> Dict[str, Any]:
-        """LLM 实体提取"""
+    async def _extract_entities(self, user_input: str) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+        """LLM 实体提取，返回 (entities, usage_record|None)。"""
+        from app.services.llm_usage import build_llm_usage_record
+
         try:
             response = await self.entity_chain.ainvoke({"user_input": user_input})
             import json
@@ -208,19 +210,27 @@ class IntentRouter:
             entities = {}
             for item in result:
                 entities[item["type"]] = item["value"]
-            return entities
+            usage = build_llm_usage_record(
+                response,
+                stage="entity_extraction",
+                model=settings.openai_model,
+                prompt_text=user_input,
+                completion_text=str(response.content or ""),
+            )
+            return entities, usage
         except Exception as e:
             logger.warning(f"Entity extraction failed: {e}")
-            return {}
+            return {}, None
 
     async def _llm_recognize(
         self,
         user_input: str,
-        context: Optional[Dict] = None
-    ) -> Dict[str, Any]:
-        """LLM 语义识别"""
+        context: Optional[Dict] = None,
+    ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+        """LLM 语义识别，返回 (result_dict, usage_record|None)。"""
+        from app.services.llm_usage import build_llm_usage_record
+
         try:
-            # 获取意图类型列表
             intent_types = [p.intent.value for p in INTENT_PATTERNS]
             template = "\n".join([f"- {i}" for i in intent_types])
 
@@ -232,6 +242,13 @@ class IntentRouter:
             import json
             import re
             json_match = re.search(r'\{.*\}', response.content, re.DOTALL)
+            usage = build_llm_usage_record(
+                response,
+                stage="intent_recognition",
+                model=settings.openai_model,
+                prompt_text=user_input,
+                completion_text=str(response.content or ""),
+            )
             if json_match:
                 result = json.loads(json_match.group())
                 return {
@@ -239,10 +256,10 @@ class IntentRouter:
                     "confidence": float(result.get("confidence", 0.5)),
                     "entities": result.get("entities", {}),
                     "reasoning": result.get("reasoning", ""),
-                }
+                }, usage
         except Exception as e:
             logger.warning(f"LLM recognition failed: {e}")
-        return {"intent": "general_chat", "confidence": 0.5, "entities": {}, "reasoning": ""}
+        return {"intent": "general_chat", "confidence": 0.5, "entities": {}, "reasoning": ""}, None
 
     def _intent_label(self, intent_key: str) -> str:
         return INTENT_DISPLAY_NAMES.get(intent_key, intent_key.replace("_", " "))
@@ -340,10 +357,15 @@ class IntentRouter:
         keyword_matches = self._keyword_match(user_input)
 
         # ===== Step 2: 实体提取 =====
-        entities = await self._extract_entities(user_input)
+        llm_usages: List[Dict[str, Any]] = []
+        entities, entity_usage = await self._extract_entities(user_input)
+        if entity_usage:
+            llm_usages.append(entity_usage)
 
         # ===== Step 3: LLM 语义识别 =====
-        llm_result = await self._llm_recognize(user_input, context)
+        llm_result, intent_usage = await self._llm_recognize(user_input, context)
+        if intent_usage:
+            llm_usages.append(intent_usage)
 
         # ===== Step 4: 综合评分 =====
         confidence_breakdown = {}
@@ -491,6 +513,7 @@ class IntentRouter:
             clarification_question=clarification_question,
             candidate_intents=list(keyword_matches.keys())[:5],
             confidence_breakdown=confidence_breakdown,
+            llm_usages=llm_usages,
         )
 
         logger.info(

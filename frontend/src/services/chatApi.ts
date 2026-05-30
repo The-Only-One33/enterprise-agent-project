@@ -285,9 +285,54 @@ export const projectApi = {
 }
 
 // 监控 API
+export interface TokenBudgetStatus {
+  level: 'normal' | 'warning' | 'critical'
+  daily: { used: number; limit: number }
+  monthly: { used: number; limit: number }
+  daily_ratio: number
+  monthly_ratio: number
+  db_available?: boolean
+}
+
+export interface UsageReportDay {
+  date: string
+  tokens: number
+  cost: number
+  requests: number
+}
+
+export interface UsageReport {
+  period: string
+  total_tokens: number
+  total_cost: number
+  total_requests: number
+  daily_breakdown: UsageReportDay[]
+  data_source?: 'mysql' | 'unavailable'
+}
+
+export interface CostDistribution {
+  by_intent: { intent: string; tokens: number; percentage: number }[]
+  by_model: { model: string; tokens: number; percentage: number }[]
+}
+
+export interface MonitorActivityItem {
+  timestamp: string
+  level: string
+  service: string
+  message: string
+}
+
 export const monitorApi = {
-  getTokenBudget: () => apiClient.get('/monitor/token-budget').then(res => res.data),
-  getUsageReport: (days?: number) => apiClient.get('/monitor/usage-report', { params: { days } }).then(res => res.data),
+  getTokenBudget: () =>
+    apiClient.get<TokenBudgetStatus>('/monitor/token-budget').then(res => res.data),
+  getUsageReport: (days?: number) =>
+    apiClient.get<UsageReport>('/monitor/usage-report', { params: { days } }).then(res => res.data),
+  getCostDistribution: (days?: number) =>
+    apiClient.get<CostDistribution>('/monitor/cost-distribution', { params: { days } }).then(res => res.data),
+  getRecentActivity: (limit?: number) =>
+    apiClient
+      .get<{ items: MonitorActivityItem[] }>('/monitor/recent-activity', { params: { limit } })
+      .then(res => res.data),
 }
 
 // 知识库 API

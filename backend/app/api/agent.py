@@ -206,6 +206,7 @@ async def chat_with_agent(
     user_context = {
         "tenant_id": tenant_code or "TENANT_DEFAULT",
         "employ_code": employ_code or "E_DEFAULT",
+        "conversation_id": request.conversation_id,
     }
 
     kind, payload = await _run_agent_chat(
@@ -239,6 +240,7 @@ async def chat_with_agent_stream(
     user_context = {
         "tenant_id": tenant_code or "TENANT_DEFAULT",
         "employ_code": employ_code or "E_DEFAULT",
+        "conversation_id": request.conversation_id,
     }
 
     async def event_generator() -> AsyncIterator[str]:
@@ -248,7 +250,7 @@ async def chat_with_agent_stream(
             )
 
             if kind == "clarification":
-                yield _sse("clarification", payload)  # type: ignore[arg-type]
+                yield _sse("clarification", payload)  # type: ignor e[arg-type]
                 yield _sse("done", {})
                 return
 
@@ -261,6 +263,12 @@ async def chat_with_agent_stream(
 
             state["final_response"] = "".join(full_response)
             append_llm_reasoning_step(state, streamed=True)
+
+            from app.services.token_usage_service import persist_token_usage_from_state
+
+            await persist_token_usage_from_state(
+                state, conversation_id=request.conversation_id
+            )
 
             yield _sse(
                 "meta",
