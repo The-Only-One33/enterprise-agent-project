@@ -32,6 +32,15 @@ class Settings(BaseSettings):
     mysql_user: str = "root"
     mysql_password: str = ""
     mysql_database: str = "enterprise_agent"
+
+    # Redis（P3：跨请求澄清 pending，多实例共享）
+    redis_url: Optional[str] = None
+    clarification_state_backend: str = "auto"  # auto | redis | memory
+    clarification_state_ttl_seconds: int = 86400
+    redis_connect_timeout_seconds: float = 2.0
+
+    # LangGraph Checkpointer（P4）
+    graph_checkpoint_backend: str = "auto"  # auto | redis | memory
     
     # Chroma
     chroma_host: str = "localhost"

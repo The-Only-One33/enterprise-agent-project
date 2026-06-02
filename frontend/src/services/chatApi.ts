@@ -39,6 +39,8 @@ export interface ClarificationResponse {
   clarification_question: string
   conversation_id: number
   reasoning_steps: ReasoningStep[]
+  clarification_type?: 'intent' | 'slot' | 'plan'
+  missing_slots?: string[]
 }
 
 export interface Conversation {
@@ -55,6 +57,15 @@ export interface AgentStreamMeta {
   routing_target: string
   reasoning_steps: ReasoningStep[]
   conversation_id?: number
+  resolved_query?: string
+  /** 周报等 Planner 导出路径，如 data/exports/weekly_xxx.md */
+  export_path?: string | null
+}
+
+/** 从 export_path 拼下载 URL（仅文件名传给后端） */
+export function weeklyExportDownloadUrl(exportPath: string): string {
+  const filename = exportPath.split('/').filter(Boolean).pop() || exportPath
+  return `${API_BASE_URL}/agent/exports/${encodeURIComponent(filename)}`
 }
 
 /** 流式读超时（单次 read 无新数据） */

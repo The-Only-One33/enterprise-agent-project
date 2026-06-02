@@ -79,6 +79,9 @@ class IntentType(str, Enum):
     # ========== 图谱/关系 ==========
     GRAPH_TRAVERSE = "graph_traverse"             # 图谱遍历
 
+    # ========== 周报 / Planner ==========
+    WEEKLY_SUMMARY = "weekly_summary"             # 周报生成与导出
+
     # ========== 通用 ==========
     GENERAL_CHAT = "general_chat"                 # 通用对话
 
@@ -98,6 +101,7 @@ class RoutingTarget(str, Enum):
     LLM = "llm"             # LLM推理
     CREATE = "create"       # 创建操作
     UPDATE = "update"       # 更新操作
+    PLANNER = "planner"     # Planner 编排（周报等复合任务）
 
 
 class IntentResult(BaseModel):
@@ -116,6 +120,10 @@ class IntentResult(BaseModel):
     confidence_breakdown: Dict[str, Any] = {}  # 各意图置信度分解
     # 意图链路 LLM 用量（实体提取、意图识别），供 cost_monitor 落库
     llm_usages: List[Dict[str, Any]] = []
+    # 结合历史解析后的 standalone query（供 RAG / 下游复用，避免重复 LLM）
+    resolved_query: str = ""
+    # 澄清类型：intent（意图消歧）| slot（参数缺失）
+    clarification_type: str = ""
 
 
 class IntentPattern(BaseModel):

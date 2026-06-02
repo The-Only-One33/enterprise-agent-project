@@ -28,12 +28,32 @@ async def lifespan(app: FastAPI):
     # 启动时初始化
     from app.core.database import init_databases
     await init_databases()
+
+    from app.agent.checkpointer import init_checkpointer
+    from app.agent.graph import init_agent_graphs
+
+    await init_checkpointer()
+    init_agent_graphs()
+
+    from app.agent.checkpointer import get_checkpoint_backend_name
+    from app.services.session_manager import get_session_state
+    import structlog
+    structlog.get_logger(__name__).info(
+        "agent_runtime_ready",
+        clarification_backend=get_session_state().backend_name,
+        graph_checkpoint_backend=get_checkpoint_backend_name(),
+    )
     
     yield
     
     # 关闭时清理
     from app.core.database import close_databases
+    from app.services.clarification_store import close_clarification_backend
+    from app.agent.checkpointer import close_checkpointer
+
     await close_databases()
+    close_clarification_backend()
+    await close_checkpointer()
 
 
 def create_app() -> FastAPI:

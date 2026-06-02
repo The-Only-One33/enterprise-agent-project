@@ -83,6 +83,8 @@ HIGH_CONFIDENCE_RULES: List[Tuple[str, IntentType, float]] = [
         IntentType.QUERY_TASK_LIST,
         0.9,
     ),
+    (r"(?:生成|导出|写|整理|输出).{0,8}周报", IntentType.WEEKLY_SUMMARY, 0.95),
+    (r"本周.{0,6}(?:周报|工作总结|工作汇总)", IntentType.WEEKLY_SUMMARY, 0.93),
 ]
 
 
@@ -131,32 +133,25 @@ class IntentRouter:
 
 ## 输出格式（JSON）：
 {{"intent": "意图类型", "confidence": 0.0-1.0, "entities": {{"实体类型": "实体值"}}, "reasoning": "识别理由"}}
+
+若提供了对话历史，必须结合历史理解当前句的真实意图（指代/续问）。
 """),
-            ("human", "用户输入: {user_input}"),
+            ("human", """{history_section}当前用户输入: {user_input}
+{resolved_hint}"""),
         ])
         self.intent_chain = self.intent_prompt | self.llm
 
         # 实体提取提示
         self.entity_prompt = ChatPromptTemplate.from_messages([
-            ("system", """从用户输入中提取关键实体。
+            ("system", """从用户输入中提取关键实体。若提供对话历史，结合历史补全省略的主语/对象。
 
 ## 实体类型：
-- task_id: 任务ID（数字）
-- task_title: 任务名称
-- task_status: 状态词（待处理/进行中/已完成）
-- priority: 优先级（高/中/低/紧急）
-- date: 日期（今天/明天/具体日期）
-- project_name: 项目名称
-- person_name: 人名
-- score_value: 评分数字
-- execution_id: 执行分工ID
-- execution_title: 执行分工名称
-- evaluation_content: 评价内容
+- task_id, task_title, task_status, priority, date, project_name, person_name, score_value, execution_id, execution_title, evaluation_content
 
 ## 输出格式（JSON数组）：
-[{{"type": "实体类型", "value": "实体值", "position": 在原文中的位置}}]
+[{{"type": "实体类型", "value": "实体值", "position": 0}}]
 """),
-            ("human", "用户输入: {user_input}"),
+            ("human", """{history_section}用户输入: {user_input}"""),
         ])
         self.entity_chain = self.entity_prompt | self.llm
 
@@ -169,14 +164,14 @@ class IntentRouter:
             score = 0
             matched_keywords = []
 
-            # 检查排除关键词
+            excluded = False
             if pattern.exclude_keywords:
                 for exclude_kw in pattern.exclude_keywords:
                     if re.search(exclude_kw, user_input):
-                        score = 0
+                        excluded = True
                         break
-            else:
-                # 匹配关键词
+
+            if not excluded:
                 for keyword in pattern.keywords:
                     if re.search(keyword, user_input, re.IGNORECASE):
                         score += 1
@@ -199,12 +194,27 @@ class IntentRouter:
 
         return matches
 
-    async def _extract_entities(self, user_input: str) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    def _history_prompt_section(self, history: Optional[List[Dict[str, str]]]) -> str:
+        from app.services.conversation_context import format_history_for_prompt, trim_for_intent
+
+        trimmed = trim_for_intent(history or [])
+        if not trimmed:
+            return ""
+        return f"对话历史：\n{format_history_for_prompt(trimmed)}\n\n"
+
+    async def _extract_entities(
+        self,
+        user_input: str,
+        history: Optional[List[Dict[str, str]]] = None,
+    ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
         """LLM 实体提取，返回 (entities, usage_record|None)。"""
         from app.services.llm_usage import build_llm_usage_record
 
         try:
-            response = await self.entity_chain.ainvoke({"user_input": user_input})
+            response = await self.entity_chain.ainvoke({
+                "user_input": user_input,
+                "history_section": self._history_prompt_section(history),
+            })
             import json
             result = json.loads(response.content)
             entities = {}
@@ -226,6 +236,9 @@ class IntentRouter:
         self,
         user_input: str,
         context: Optional[Dict] = None,
+        *,
+        history: Optional[List[Dict[str, str]]] = None,
+        resolved_hint: str = "",
     ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
         """LLM 语义识别，返回 (result_dict, usage_record|None)。"""
         from app.services.llm_usage import build_llm_usage_record
@@ -233,10 +246,15 @@ class IntentRouter:
         try:
             intent_types = [p.intent.value for p in INTENT_PATTERNS]
             template = "\n".join([f"- {i}" for i in intent_types])
+            hint_line = ""
+            if resolved_hint and resolved_hint.strip() != user_input.strip():
+                hint_line = f"结合历史后的完整表述参考: {resolved_hint.strip()}\n"
 
             response = await self.intent_chain.ainvoke({
                 "user_input": user_input,
                 "template_types": template,
+                "history_section": self._history_prompt_section(history),
+                "resolved_hint": hint_line,
             })
 
             import json
@@ -329,45 +347,69 @@ class IntentRouter:
         user_input: str,
         context: Optional[Dict] = None,
         debug: bool = False,
+        history: Optional[List[Dict[str, str]]] = None,
     ) -> IntentResult:
         """
         识别用户意图
 
         Args:
-            user_input: 用户输入
-            context: 上下文信息
+            user_input: 当前轮用户输入
+            context: 额外上下文
             debug: 是否返回调试信息
-
-        Returns:
-            IntentResult: 意图识别结果
+            history: 多轮对话 [{role, content}, ...]，不含当前句
         """
         logger.info("intent_recognition_started", user_input=user_input[:100])
 
-        # ===== Step 0: 高置信度规则（优先） =====
-        rule_result = self._try_rule_based_match(user_input)
+        llm_usages: List[Dict[str, Any]] = []
+        resolved_query = user_input.strip()
+
+        # ===== Step 0: 多轮 contextualize（指代/续问 → standalone query） =====
+        from app.services.conversation_context import trim_for_intent
+        from app.services.rag.query_optimizer import get_query_optimizer
+
+        trimmed_history = trim_for_intent(history or [])
+        if trimmed_history:
+            optimizer = get_query_optimizer()
+            resolved_query, ctx_usage = await optimizer.contextualize(
+                user_input, trimmed_history
+            )
+            if ctx_usage:
+                llm_usages.append(ctx_usage)
+
+        working_input = resolved_query or user_input.strip()
+
+        # ===== Step 1: 高置信度规则（对 standalone query） =====
+        rule_result = self._try_rule_based_match(working_input)
         if rule_result is not None:
+            rule_result.resolved_query = working_input
+            rule_result.llm_usages = llm_usages
             logger.info(
                 "intent_recognition_rule_matched",
                 intent=rule_result.intent.value,
                 confidence=rule_result.confidence,
+                resolved=working_input[:50],
             )
             return rule_result
 
-        # ===== Step 1: 关键词匹配 =====
-        keyword_matches = self._keyword_match(user_input)
+        # ===== Step 2: 关键词匹配 =====
+        keyword_matches = self._keyword_match(working_input)
 
-        # ===== Step 2: 实体提取 =====
-        llm_usages: List[Dict[str, Any]] = []
-        entities, entity_usage = await self._extract_entities(user_input)
+        # ===== Step 3: 实体提取 =====
+        entities, entity_usage = await self._extract_entities(working_input, trimmed_history)
         if entity_usage:
             llm_usages.append(entity_usage)
 
-        # ===== Step 3: LLM 语义识别 =====
-        llm_result, intent_usage = await self._llm_recognize(user_input, context)
+        # ===== Step 4: LLM 语义识别（带历史 + resolved 提示） =====
+        llm_result, intent_usage = await self._llm_recognize(
+            user_input,
+            context,
+            history=trimmed_history,
+            resolved_hint=working_input,
+        )
         if intent_usage:
             llm_usages.append(intent_usage)
 
-        # ===== Step 4: 综合评分 =====
+        # ===== Step 5: 综合评分 =====
         confidence_breakdown = {}
 
         # Step 4.1: 构建意图候选列表
@@ -514,6 +556,7 @@ class IntentRouter:
             candidate_intents=list(keyword_matches.keys())[:5],
             confidence_breakdown=confidence_breakdown,
             llm_usages=llm_usages,
+            resolved_query=working_input,
         )
 
         logger.info(
@@ -521,6 +564,7 @@ class IntentRouter:
             intent=final_intent.value,
             confidence=final_confidence,
             routing_target=routing_target.value,
+            resolved=working_input[:50],
         )
 
         return result

@@ -18,6 +18,7 @@ from functools import lru_cache
 import os
 import uuid
 import re
+from pathlib import Path
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -35,6 +36,9 @@ settings = get_settings()
 CHROMA_PERSIST_DIR = "./data/chroma_db"
 BM25_ALPHA = 0.3
 RERANK_CANDIDATE_MULTIPLIER = 6  # 粗排候选数 = top_k * 此系数
+
+_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+RAG_DOCS_DIR = os.path.join(_BACKEND_ROOT, "data", "rag", "docs")
 
 
 def _sanitize_chroma_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
@@ -261,6 +265,51 @@ class RAGService:
         except Exception as e:
             logger.error(f"Failed to load sample data: {e}")
 
+        self._load_bundled_rag_docs()
+
+    def _load_bundled_rag_docs(self):
+        """加载 data/rag/docs 下的内置知识（如周报规范）。"""
+        bundled = [
+            {
+                "filename": "weekly_report_writing_guide.md",
+                "doc_id": "doc_weekly_report_guide",
+                "title": "员工周报撰写规范与模板说明",
+                "doc_type": "制度文件",
+                "category": "周报",
+            },
+        ]
+        for item in bundled:
+            path = os.path.join(RAG_DOCS_DIR, item["filename"])
+            if not os.path.isfile(path):
+                continue
+            try:
+                content = Path(path).read_text(encoding="utf-8")
+                meta = {
+                    "tenant_id": "TENANT_DEFAULT",
+                    "doc_type": item["doc_type"],
+                    "title": item["title"],
+                    "category": item["category"],
+                    "doc_id": item["doc_id"],
+                }
+                chunks = chunk_document(content, meta)
+                if not chunks:
+                    continue
+                ids = [c.metadata["chunk_id"] for c in chunks]
+                for c in chunks:
+                    c.metadata = _sanitize_chroma_metadata(c.metadata)
+                self.vectorstore.add_documents(documents=chunks, ids=ids)
+                logger.info(
+                    "bundled_rag_doc_loaded",
+                    doc_id=item["doc_id"],
+                    chunk_count=len(chunks),
+                )
+            except Exception as e:
+                logger.warning(
+                    "bundled_rag_doc_load_failed",
+                    doc_id=item.get("doc_id"),
+                    error=str(e),
+                )
+
     async def _delete_chunks_by_doc_id(self, doc_id: str) -> int:
         """删除某父文档下的全部 chunk。"""
         try:
@@ -281,12 +330,14 @@ class RAGService:
         enable_optimization: bool = True,
         use_hybrid: bool = True,
         enable_rerank: bool = True,
+        history: Optional[List[Dict[str, str]]] = None,
+        resolved_query: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         语义相似度检索 - chunk 级检索（Query 优化 + 混合检索 + 重排）
 
-        Returns:
-            检索结果列表；若启用优化，首条可能为 optimization_info
+        history: 多轮对话 [{role, content}]，用于 contextualize（若 resolved_query 未提供）
+        resolved_query: 意图阶段已解析的 standalone query，避免重复 LLM
         """
         logger.info("rag_search_started", query=query[:50], tenant_id=tenant_id)
 
@@ -294,11 +345,17 @@ class RAGService:
             optimized = None
             if enable_optimization:
                 optimizer = get_query_optimizer()
-                optimized = await optimizer.optimize(query, strategy="expand")
+                optimized = await optimizer.optimize(
+                    query,
+                    strategy="expand",
+                    history=history,
+                    resolved_query=resolved_query,
+                )
                 final_queries = optimized["final_queries"]
                 logger.info(
                     "query_optimization_applied",
                     original=query[:30],
+                    resolved=optimized.get("resolved", query)[:30],
                     rewritten=optimized["rewritten"][:30],
                     query_count=len(final_queries),
                 )
@@ -386,6 +443,7 @@ class RAGService:
                 results.insert(0, {
                     "type": "optimization_info",
                     "original": query,
+                    "resolved": optimized.get("resolved", query),
                     "rewritten": optimized["rewritten"],
                     "expanded": optimized["expanded"],
                     "hyde_doc": optimized.get("hyde_doc", ""),

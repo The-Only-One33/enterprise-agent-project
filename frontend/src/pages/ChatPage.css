@@ -76,6 +76,38 @@
   padding: 20px;
 }
 
+.quick-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
+  justify-content: center;
+}
+
+.quick-prompt-chip {
+  background: rgba(59, 130, 246, 0.15);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  color: var(--text-primary);
+  padding: 8px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.2s;
+}
+
+.quick-prompt-chip:hover {
+  background: rgba(59, 130, 246, 0.28);
+}
+
+.clarification-hint {
+  margin-bottom: 10px;
+}
+
+.export-download-btn {
+  padding-left: 0;
+  margin-top: 8px;
+}
+
 .welcome-state {
   display: flex;
   flex-direction: column;

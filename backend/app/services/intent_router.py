@@ -15,6 +15,7 @@ from app.services.intent.task import TaskIntentType
 from app.services.intent.project import ProjectIntentType
 from app.services.intent.score import ScoreIntentType
 from app.services.intent.knowledge import KnowledgeIntentType
+from app.services.intent import weekly  # noqa: F401 — 注册周报意图模式
 
 __all__ = [
     "IntentRouter",

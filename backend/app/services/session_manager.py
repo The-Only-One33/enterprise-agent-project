@@ -1,94 +1,65 @@
 """
-会话状态管理服务
-用于在澄清流程中保存和恢复 Agent 状态
+会话状态管理服务（P3）
+
+- 澄清 pending：Redis 持久化（多实例共享），无 Redis 时回退内存
+- 对话历史：MySQL（conversation_service）
 """
-import json
-from typing import Dict, Any, Optional
-from datetime import datetime
+from typing import Any, Dict, Optional
+
+from app.services.clarification_store import (
+    ClarificationStoreBackend,
+    get_clarification_backend,
+)
 
 
 class SessionState:
-    """会话状态存储（内存版，生产环境建议用 Redis）"""
+    """澄清 pending 状态；底层由 Redis 或内存实现。"""
 
-    def __init__(self):
-        # conversation_id -> state dict
-        self._states: Dict[int, Dict[str, Any]] = {}
-        # conversation_id -> created_at
-        self._timestamps: Dict[int, datetime] = {}
+    def __init__(self, backend: Optional[ClarificationStoreBackend] = None) -> None:
+        self._backend = backend or get_clarification_backend()
+
+    @property
+    def backend_name(self) -> str:
+        return self._backend.backend_name
 
     def save_state(self, conversation_id: int, state: Dict[str, Any]) -> None:
-        """保存会话状态"""
-        # 只保存关键状态
-        save_data = {
-            "intent": state.get("intent"),
-            "confidence": state.get("confidence"),
-            "entities": state.get("entities", {}),
-            "routing_target": state.get("routing_target"),
-            "needs_clarification": state.get("needs_clarification", False),
-            "clarification_question": state.get("clarification_question"),
-            "reasoning_steps": state.get("reasoning_steps", []),
-        }
-        self._states[conversation_id] = save_data
-        self._timestamps[conversation_id] = datetime.utcnow()
+        self._backend.save(conversation_id, state)
 
     def get_state(self, conversation_id: int) -> Optional[Dict[str, Any]]:
-        """获取会话状态"""
-        return self._states.get(conversation_id)
+        return self._backend.get(conversation_id)
 
     def clear_state(self, conversation_id: int) -> None:
-        """清除会话状态"""
-        self._states.pop(conversation_id, None)
-        self._timestamps.pop(conversation_id, None)
+        self._backend.delete(conversation_id)
 
     def has_pending_clarification(self, conversation_id: int) -> bool:
-        """检查是否有待处理的澄清"""
         state = self.get_state(conversation_id)
         return state is not None and state.get("needs_clarification", False) is True
 
+    def get_clarification_type(self, conversation_id: int) -> Optional[str]:
+        state = self.get_state(conversation_id)
+        if not state or not state.get("needs_clarification"):
+            return None
+        return state.get("clarification_type") or "intent"
 
-# 全局单例
-_session_state = SessionState()
+    def clear_clarification_pending(self, conversation_id: int) -> None:
+        """用户已回复澄清：清除 pending 标记，对话历史在 MySQL 中保留。"""
+        self.clear_state(conversation_id)
+
+
+_session_state: Optional[SessionState] = None
 
 
 def get_session_state() -> SessionState:
-    """获取会话状态服务实例"""
+    global _session_state
+    if _session_state is None:
+        _session_state = SessionState()
     return _session_state
 
 
-# ==================== 对话历史管理 ====================
+def reset_session_state() -> None:
+    """测试时重置 SessionState 单例（会重新选择 Redis/内存后端）。"""
+    global _session_state
+    from app.services.clarification_store import reset_clarification_backend
 
-
-def get_conversation_messages(conversation_id: int) -> list:
-    """
-    从数据库获取对话历史
-
-    TODO: 实际实现时从数据库读取
-    """
-    # 暂时返回空列表，后续接入数据库
-    return []
-
-
-def append_message(conversation_id: int, role: str, content: str) -> None:
-    """
-    添加消息到对话历史
-
-    TODO: 实际实现时写入数据库
-    """
-    pass
-
-
-def save_message_with_context(
-    conversation_id: int,
-    role: str,
-    content: str,
-    intent: str = None,
-    reasoning_steps: list = None,
-    needs_clarification: bool = False,
-    clarification_question: str = None,
-) -> None:
-    """
-    保存消息及其上下文
-
-    TODO: 实际实现时写入数据库
-    """
-    pass
+    _session_state = None
+    reset_clarification_backend()

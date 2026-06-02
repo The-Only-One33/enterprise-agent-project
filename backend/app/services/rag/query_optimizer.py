@@ -1,40 +1,70 @@
 """
 Query 优化模块 - 提升 RAG 检索效果
 
-包含以下优化策略：
-1. Query Rewriting: 口语化转正式表述
-2. Query Expansion: 多路召回扩展
-3. HyDE: 假设文档增强检索
+包含：
+1. Contextualize: 多轮 → standalone query（意图/RAG 共用）
+2. Query Rewriting: 口语化 → 检索表述
+3. Query Expansion / HyDE
 """
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
 from app.config import get_settings
 from app.core.logging import get_logger
+from app.services.conversation_context import (
+    HistoryTurn,
+    format_history_for_prompt,
+    should_contextualize,
+    trim_for_rag,
+)
 
 logger = get_logger(__name__)
 settings = get_settings()
 
 
 class QueryOptimizer:
-    """
-    Query 优化器 - 提供多种查询优化策略
-    """
+    """Query 优化器"""
 
     def __init__(self):
         self.llm = ChatOpenAI(
             model=settings.openai_model,
             api_key=settings.openai_api_key,
             base_url=settings.openai_base_url or None,
-            temperature=0.3,  # 适度随机，保持创造性
+            temperature=0.2,
         )
         self._setup_prompts()
 
     def _setup_prompts(self):
-        """设置提示模板"""
+        self.contextualize_prompt = ChatPromptTemplate.from_messages([
+            ("system", """你是企业 Agent 的「查询上下文解析」专家。
+根据对话历史，将用户「当前输入」改写成一条**可独立理解**的完整表述（standalone query）。
 
-        # 1. Query Rewriting: 口语化转正式表述
+要求：
+1. 必须结合历史补全指代（「那/这/它/处理一下/继续」等）
+2. 保留用户真实意图，不要臆造未提及的业务对象
+3. 输出一条简洁中文陈述句，30字以内，不要 JSON、不要解释
+4. 若当前输入已完整清晰，可轻微规范化后原样输出
+
+示例：
+历史: 用户: 任务创建流程是什么？  助手: （介绍了创建步骤）
+当前: 那帮我处理一下
+输出: 帮我在系统中创建任务
+
+历史: 用户: 张三的项目进度  助手: ...
+当前: 继续查他的任务
+输出: 查询张三负责的任务列表
+"""),
+            ("human", """对话历史：
+{conversation_history}
+
+当前用户输入：{current_input}
+
+请输出 standalone query："""),
+        ])
+        self.contextualize_chain = self.contextualize_prompt | self.llm
+
         self.rewrite_prompt = ChatPromptTemplate.from_messages([
             ("system", """你是一个企业知识库查询优化专家。
 将用户的口语化表达转换为正式的知识库检索查询。
@@ -48,23 +78,15 @@ class QueryOptimizer:
 示例：
 - "我想查一下怎么创建任务" → "任务创建流程 操作指南"
 - "有没有关于项目管理的规定啊" → "项目管理规范 制度文件"
-- "那个OKR是啥意思来着" → "OKR目标管理 定义"
-- "怎么给任务打分来着" → "任务评分标准 打分规则"
 """),
             ("human", "用户输入: {user_input}"),
         ])
         self.rewrite_chain = self.rewrite_prompt | self.llm
 
-        # 2. Query Expansion: 多路召回扩展
         self.expand_prompt = ChatPromptTemplate.from_messages([
             ("system", """你是一个企业知识库检索专家。
 根据用户查询，生成3-5个相关检索词，用于多路召回。
-
-要求：
-1. 保留原始查询意图
-2. 生成不同角度的变体（同义词、上下位词、简称等）
-3. 每个扩展词控制在10字以内
-4. 输出JSON数组格式
+输出 JSON 数组格式，每个扩展词10字以内。
 
 示例：
 输入: "如何创建任务"
@@ -74,35 +96,54 @@ class QueryOptimizer:
         ])
         self.expand_chain = self.expand_prompt | self.llm
 
-        # 3. HyDE: 假设文档生成
         self.hyde_prompt = ChatPromptTemplate.from_messages([
-            ("system", """你是一个企业知识库文档撰写专家。
-根据用户问题，生成一个假设的知识库文档片段。
-
-要求：
-1. 模拟真实的知识文档风格（制度文件、操作指南、FAQ等）
-2. 内容准确、格式规范
-3. 长度控制在100字左右
-4. 不需要完整的答案，只需生成可能被检索到的文档片段
-
-示例：
-输入: "任务评分标准是什么"
-输出: "【任务评分标准】优秀(90-100分)：工作成果超出预期...良好(80-89分)：按时按质完成...合格(60-79分)：基本达到要求..."
-"""),
+            ("system", """根据用户问题，生成一个假设的知识库文档片段（约100字）。"""),
             ("human", "用户问题: {question}"),
         ])
         self.hyde_chain = self.hyde_prompt | self.llm
 
+    async def contextualize(
+        self,
+        current_input: str,
+        history: Optional[List[HistoryTurn]] = None,
+    ) -> Tuple[str, Optional[Dict[str, Any]]]:
+        """
+        多轮上下文 → standalone query。
+        无历史或无需解析时直接返回原句。
+        """
+        trimmed = trim_for_rag(history or [])
+        if not should_contextualize(current_input, trimmed):
+            return current_input.strip(), None
+
+        try:
+            from app.services.llm_usage import build_llm_usage_record
+
+            response = await self.contextualize_chain.ainvoke({
+                "conversation_history": format_history_for_prompt(trimmed),
+                "current_input": current_input.strip(),
+            })
+            resolved = (response.content or "").strip().strip('"').strip("'")
+            if not resolved:
+                return current_input.strip(), None
+
+            usage = build_llm_usage_record(
+                response,
+                stage="query_contextualize",
+                model=settings.openai_model,
+                prompt_text=current_input,
+                completion_text=resolved,
+            )
+            logger.info(
+                "query_contextualized",
+                original=current_input[:40],
+                resolved=resolved[:40],
+            )
+            return resolved, usage
+        except Exception as e:
+            logger.warning(f"Query contextualize failed, using original: {e}")
+            return current_input.strip(), None
+
     async def rewrite(self, query: str) -> str:
-        """
-        Query Rewriting: 口语化转正式表述
-
-        Args:
-            query: 原始用户输入
-
-        Returns:
-            优化后的检索查询
-        """
         try:
             response = await self.rewrite_chain.ainvoke({"user_input": query})
             rewritten = response.content.strip()
@@ -113,52 +154,26 @@ class QueryOptimizer:
             return query
 
     async def expand(self, query: str, num_expansions: int = 5) -> List[str]:
-        """
-        Query Expansion: 多路召回扩展
-
-        Args:
-            query: 原始查询或已改写的查询
-            num_expansions: 扩展数量
-
-        Returns:
-            扩展后的查询列表
-        """
         try:
-            response = await self.expand_chain.ainvoke({"query": query})
-
-            # 解析 JSON 数组
             import json
             import re
-            json_match = re.search(r'\[.*\]', response.content, re.DOTALL)
+
+            response = await self.expand_chain.ainvoke({"query": query})
+            json_match = re.search(r"\[.*\]", response.content, re.DOTALL)
             if json_match:
                 expansions = json.loads(json_match.group())
-                # 限制数量
-                expansions = expansions[:num_expansions]
-                logger.info("query_expand", original=query[:20], expansions_count=len(expansions))
-                return expansions
-            else:
-                # 兜底：按逗号分割
-                expansions = [q.strip() for q in response.content.split(',') if q.strip()]
                 return expansions[:num_expansions]
+            return [q.strip() for q in response.content.split(",") if q.strip()][
+                :num_expansions
+            ]
         except Exception as e:
             logger.warning(f"Query expand failed, using original: {e}")
             return [query]
 
     async def generate_hypothetical_document(self, question: str) -> str:
-        """
-        HyDE: 生成假设文档
-
-        Args:
-            question: 用户问题
-
-        Returns:
-            假设的文档片段
-        """
         try:
             response = await self.hyde_chain.ainvoke({"question": question})
-            hyde_doc = response.content.strip()
-            logger.info("hyde_generated", question=question[:30], doc_length=len(hyde_doc))
-            return hyde_doc
+            return response.content.strip()
         except Exception as e:
             logger.warning(f"HyDE generation failed: {e}")
             return question
@@ -167,57 +182,55 @@ class QueryOptimizer:
         self,
         query: str,
         strategy: str = "full",
+        history: Optional[List[HistoryTurn]] = None,
+        *,
+        resolved_query: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        综合优化 - 应用多种策略
-
-        Args:
-            query: 原始查询
-            strategy: 优化策略
-                - "rewrite": 仅改写
-                - "expand": 改写+扩展
-                - "hyde": 改写+HyDE
-                - "full": 全部策略
-
-        Returns:
-            {
-                "rewritten": 改写后的查询,
-                "expanded": 扩展查询列表,
-                "hyde_doc": 假设文档,
-                "final_queries": 最终检索用的查询列表
-            }
+        综合优化。
+        resolved_query: 若意图阶段已 contextualize，传入以避免重复 LLM。
         """
-        result = {
+        result: Dict[str, Any] = {
             "original": query,
+            "resolved": query,
             "rewritten": query,
             "expanded": [],
             "hyde_doc": "",
             "final_queries": [query],
         }
 
+        base = resolved_query
+        if not base and history:
+            base, _ = await self.contextualize(query, history)
+        elif not base:
+            base = query.strip()
+
+        result["resolved"] = base
+
         if strategy in ["rewrite", "expand", "full"]:
-            result["rewritten"] = await self.rewrite(query)
+            result["rewritten"] = await self.rewrite(base)
 
         if strategy in ["expand", "full"]:
             result["expanded"] = await self.expand(result["rewritten"])
-            # 最终查询 = 改写 + 扩展
             result["final_queries"] = [result["rewritten"]] + result["expanded"]
 
         if strategy in ["hyde", "full"]:
-            result["hyde_doc"] = await self.generate_hypothetical_document(query)
-            # HyDE 查询 = 原查询 + 假设文档
+            result["hyde_doc"] = await self.generate_hypothetical_document(base)
             result["final_queries"].append(result["hyde_doc"])
 
-        logger.info("query_optimized", strategy=strategy, final_count=len(result["final_queries"]))
+        logger.info(
+            "query_optimized",
+            strategy=strategy,
+            resolved=result["resolved"][:30],
+            final_count=len(result["final_queries"]),
+        )
         return result
 
 
-# 单例
 _optimizer: Optional[QueryOptimizer] = None
 
 
 def get_query_optimizer() -> QueryOptimizer:
-    """获取 Query 优化器单例"""
     global _optimizer
     if _optimizer is None:
         _optimizer = QueryOptimizer()

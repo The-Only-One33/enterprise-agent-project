@@ -1,62 +1,67 @@
-"""
-对话模型
-"""
-from sqlalchemy import Column, String, Integer, DateTime, Text, ForeignKey, JSON
-from sqlalchemy.orm import relationship
+"""对话与消息持久化表"""
 from datetime import datetime
+from typing import Optional
 
-from app.core.database import Base
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.base import Base
 
 
 class Conversation(Base):
-    """对话表"""
     __tablename__ = "conversations"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    title = Column(String(200), default="新对话")
-    
-    # 配置
-    config = Column(JSON, default={})  # 使用的模型、Agent类型等
-    
-    # 统计
-    message_count = Column(Integer, default=0)
-    token_usage = Column(Integer, default=0)
-    
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # 关系
-    user = relationship("User", back_populates="conversations")
-    messages = relationship("Message", back_populates="conversation", order_by="Message.created_at")
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    user_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(256), nullable=False, default="新对话")
+    message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    messages: Mapped[list["Message"]] = relationship(
+        "Message",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="Message.id",
+    )
+
+    __table_args__ = (
+        Index("ix_conversations_tenant_user_updated", "tenant_id", "user_key", "updated_at"),
+    )
 
 
 class Message(Base):
-    """消息表"""
     __tablename__ = "messages"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False)
-    
-    # 角色
-    role = Column(String(20), nullable=False)  # user, assistant, system, tool
-    
-    # 内容
-    content = Column(Text)
-    
-    # 工具调用 (Agent推理过程)
-    tool_calls = Column(JSON, nullable=True)
-    tool_results = Column(JSON, nullable=True)
-    
-    # Token统计
-    input_tokens = Column(Integer, default=0)
-    output_tokens = Column(Integer, default=0)
-    
-    # 执行信息
-    latency_ms = Column(Integer, nullable=True)
-    model_used = Column(String(50))
-    
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # 关系
-    conversation = relationship("Conversation", back_populates="messages")
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        index=True,
+    )
+
+    conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="messages")
+
+    __table_args__ = (
+        Index("ix_messages_conversation_created", "conversation_id", "created_at"),
+    )

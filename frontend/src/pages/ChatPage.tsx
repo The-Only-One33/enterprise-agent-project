@@ -1,10 +1,19 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { SendOutlined, RobotOutlined, UserOutlined, LoadingOutlined, BulbOutlined } from '@ant-design/icons'
-import { Spin, Collapse, Tag, Empty, message } from 'antd'
+import {
+  SendOutlined,
+  RobotOutlined,
+  UserOutlined,
+  LoadingOutlined,
+  BulbOutlined,
+  DownloadOutlined,
+  QuestionCircleOutlined,
+} from '@ant-design/icons'
+import { Spin, Collapse, Tag, Empty, message, Button, Alert } from 'antd'
 import ReactMarkdown from 'react-markdown'
 import {
   chatApi,
   StreamInterruptedError,
+  weeklyExportDownloadUrl,
   type ReasoningStep,
   type Source,
 } from '../services/chatApi'
@@ -19,10 +28,31 @@ interface Message {
   reasoning?: ReasoningStep[]
   sources?: Source[]
   isClarification?: boolean
+  clarificationType?: 'intent' | 'slot' | 'plan'
   conversationId?: number
+  exportPath?: string
   /** 正在流式输出 / 打字机动画中 */
   isStreaming?: boolean
 }
+
+function clarificationHint(type?: string): string | null {
+  switch (type) {
+    case 'plan':
+      return '可回复：全部项目总周报 / 单项目：项目名 / 上周 / 近两周'
+    case 'slot':
+      return '请根据上文补充缺失的业务参数'
+    case 'intent':
+      return '请明确你想执行的操作（查询、创建、周报等）'
+    default:
+      return null
+  }
+}
+
+const QUICK_PROMPTS = [
+  '帮我生成本周周报',
+  '查询我的任务',
+  '周报怎么写',
+]
 
 interface Conversation {
   id: number
@@ -138,9 +168,9 @@ export default function ChatPage() {
 
     setMessages(prev => [...prev, userMessage])
 
-    const lastAssistantMsg = messages.find(m => m.isClarification)
-    // 这个没看懂
-    const conversationId = lastAssistantMsg?.conversationId || activeConversation
+    const pendingClarification = [...messages].reverse().find(m => m.isClarification)
+    const conversationId =
+      pendingClarification?.conversationId ?? activeConversation ?? undefined
 
     setInput('')
     setIsLoading(true)
@@ -171,9 +201,13 @@ export default function ChatPage() {
           onToken: delta => typewriter.pushReceived(delta),
           onClarification: data => {
             typewriter.setImmediate(data.clarification_question)
+            if (data.conversation_id) {
+              setActiveConversation(data.conversation_id)
+            }
             finishStreamingMessage({
               content: data.clarification_question,
               isClarification: true,
+              clarificationType: data.clarification_type,
               conversationId: data.conversation_id,
               reasoning: (data.reasoning_steps || []).map(step => ({
                 step: step.step,
@@ -183,12 +217,16 @@ export default function ChatPage() {
             })
           },
           onMeta: meta => {
+            if (meta.conversation_id) {
+              setActiveConversation(meta.conversation_id)
+            }
             pendingMetaRef.current = {
               reasoning: (meta.reasoning_steps || []).map(step => ({
                 step: step.step,
                 thought: step.thought,
                 action: step.action,
               })),
+              exportPath: meta.export_path || undefined,
             }
           },
           onError: errMsg => {
@@ -232,12 +270,27 @@ export default function ChatPage() {
 
   const getStepIcon = (step: string) => {
     switch (step) {
-      case 'intent_recognition': return <RobotOutlined />
-      case 'graph_traverse': return <BulbOutlined />
-      case 'db_query': return <BulbOutlined />
-      case 'llm_reasoning': return <RobotOutlined />
-      default: return <BulbOutlined />
+      case 'intent_recognition':
+      case 'intent_clarification_resume':
+        return <RobotOutlined />
+      case 'graph_traverse':
+        return <BulbOutlined />
+      case 'db_query':
+      case 'plan_query_data':
+      case 'plan_rag_guide':
+        return <BulbOutlined />
+      case 'llm_reasoning':
+        return <RobotOutlined />
+      case 'clarification_interrupt':
+      case 'react_fallback':
+        return <QuestionCircleOutlined />
+      default:
+        return <BulbOutlined />
     }
+  }
+
+  const sendQuickPrompt = (text: string) => {
+    setInput(text)
   }
 
   const getSourceColor = (type: string) => {
@@ -291,10 +344,22 @@ export default function ChatPage() {
               <p>我是您的智能助手，可以帮助您：</p>
               <ul>
                 <li>查询任务状态、评分和进度</li>
-                <li>查找相似历史任务</li>
-                <li>分析员工-项目-任务的关联关系</li>
+                <li>生成并导出本周周报（Planner + ReAct）</li>
+                <li>知识库问答（如「周报怎么写」）</li>
                 <li>创建和管理项目任务</li>
               </ul>
+              <div className="quick-prompts">
+                {QUICK_PROMPTS.map(text => (
+                  <button
+                    key={text}
+                    type="button"
+                    className="quick-prompt-chip"
+                    onClick={() => sendQuickPrompt(text)}
+                  >
+                    {text}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             messages.map(msg => (
@@ -303,6 +368,21 @@ export default function ChatPage() {
                   {msg.role === 'user' ? <UserOutlined /> : <RobotOutlined />}
                 </div>
                 <div className="message-content">
+                  {msg.isClarification && clarificationHint(msg.clarificationType) && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      className="clarification-hint"
+                      message={
+                        msg.clarificationType === 'plan'
+                          ? '周报范围确认'
+                          : msg.clarificationType === 'slot'
+                            ? '参数补充'
+                            : '意图确认'
+                      }
+                      description={clarificationHint(msg.clarificationType)}
+                    />
+                  )}
                   <div className={`message-text ${msg.isStreaming ? 'is-streaming' : ''}`}>
                     {msg.content ? (
                       <ReactMarkdown>{msg.content}</ReactMarkdown>
@@ -313,6 +393,18 @@ export default function ChatPage() {
                       <span className="stream-cursor" aria-hidden />
                     ) : null}
                   </div>
+                  {msg.exportPath && !msg.isStreaming && (
+                    <Button
+                      type="link"
+                      icon={<DownloadOutlined />}
+                      className="export-download-btn"
+                      href={weeklyExportDownloadUrl(msg.exportPath)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      下载周报 Markdown
+                    </Button>
+                  )}
                   {msg.reasoning && msg.reasoning.length > 0 && !msg.isStreaming && (
                     <Collapse
                       className="reasoning-collapse"
